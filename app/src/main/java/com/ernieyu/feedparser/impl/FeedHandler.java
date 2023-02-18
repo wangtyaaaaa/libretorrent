@@ -23,7 +23,7 @@ class FeedHandler extends DefaultHandler {
     private static final String TITLE = "title";
 
 
-    private static final String MIKANANI_TITLE = "Mikan Project - 我的番组";
+    private static final String MIKANANI_TITLE = "Mikan Project";
 
     private Stack<BaseElement> elementStack;
     private Feed feed;
@@ -128,7 +128,7 @@ class FeedHandler extends DefaultHandler {
         }
         currentElement.setContent(content);
         if (TITLE.equalsIgnoreCase(localName) || TITLE.equalsIgnoreCase(qName))
-            if (MIKANANI_TITLE.equals(content))
+            if (content!=null && content.startsWith(MIKANANI_TITLE))
                 type = FeedType.MIKANANI;
 
         // Add current element to its parent.
