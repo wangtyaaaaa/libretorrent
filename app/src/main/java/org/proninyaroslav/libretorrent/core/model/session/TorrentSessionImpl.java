@@ -125,6 +125,7 @@ public class TorrentSessionImpl extends SessionManager
             AlertType.TORRENT_LOG.swig(),
             AlertType.SESSION_STATS.swig(),
             AlertType.SAVE_RESUME_DATA.swig(),
+            AlertType.PEER_UNSNUBBED.swig(),
     };
 
     /* Base unit in KiB. Used for create torrent */
