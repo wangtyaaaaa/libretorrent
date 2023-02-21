@@ -80,6 +80,8 @@ import org.proninyaroslav.libretorrent.core.storage.TorrentRepository;
 import org.proninyaroslav.libretorrent.core.system.FileSystemFacade;
 
 import java.io.FileNotFoundException;
+import java.lang.reflect.Array;
+import java.nio.file.LinkOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -128,6 +130,7 @@ class TorrentDownloadImpl implements TorrentDownload
             AlertType.FILE_ERROR.swig(),
             AlertType.FASTRESUME_REJECTED.swig(),
             AlertType.TORRENT_CHECKED.swig(),
+            AlertType.PEER_CONNECT.swig(),
     };
 
     private SessionManager sessionManager;
@@ -149,6 +152,7 @@ class TorrentDownloadImpl implements TorrentDownload
     private boolean hasMissingFiles;
     private boolean hasFirstLastPiecePriority;
     private Queue<IPTime> banQueue;
+    private long banCheckTime;
 
     private class IPTime{
         String ip;
@@ -289,9 +293,12 @@ class TorrentDownloadImpl implements TorrentDownload
                 case TORRENT_CHECKED:
                     handleTorrentChecked();
                     break;
-                case PEER_UNSNUBBED:
-                    checkBanedIPTimeout();
-                    autoBanBadClient();
+                case PEER_CONNECT:
+                    if(banCheckTime>System.currentTimeMillis()){
+                        checkBanedIPTimeout();
+                        autoBanBadClient();
+                        banCheckTime=System.currentTimeMillis()+5000;
+                    }
                 default:
                     checkError(alert);
                     break;
@@ -302,9 +309,10 @@ class TorrentDownloadImpl implements TorrentDownload
     private void checkBanedIPTimeout() {
 
         IPTime ipTime;
-        while((ipTime=banQueue.poll())!=null){
+        while((ipTime=banQueue.peek())!=null){
             if(System.currentTimeMillis()>ipTime.time){
                 removeBanedIP(ipTime.ip);
+                banQueue.remove();
             }else return;
         }
     }
@@ -312,7 +320,8 @@ class TorrentDownloadImpl implements TorrentDownload
     private void removeBanedIP(String ip) {
         ip_filter filter=sessionManager.swig().get_ip_filter();
         error_code ec = new error_code();
-        address add= address.from_string(ip,ec);
+        String true_ip=getTrueIP(ip);
+        address add= address.from_string(true_ip,ec);
         if (ec.value() > 0)
             return;
         ec.clear();
@@ -324,7 +333,9 @@ class TorrentDownloadImpl implements TorrentDownload
         String filter1="-(XL|SD|XF|QD|BN|DL)(\\d+)-";
         String filter2="(\\d+.\\d+.\\d+.\\d+|cacao_torrent)";
         for (PeerInfo peerInfo: getPeerInfoList()) {
-            if(peerInfo.client.matches(filter1)||peerInfo.client.matches(filter2)){
+            if(peerInfo.client.matches(filter1+".*")
+             ||peerInfo.client.matches(filter2+".*")
+             ||peerInfo.client.startsWith("Xunlei")) {
                 Log.i(TAG,"Auto banning bad peer pid:"+ peerInfo.parcelId + "ip:"+peerInfo.ip+"  client:"+peerInfo.client);
                 tempBanIP(peerInfo.ip);
             }
@@ -334,13 +345,31 @@ class TorrentDownloadImpl implements TorrentDownload
     private void tempBanIP(String ip) {
         ip_filter filter = sessionManager.swig().get_ip_filter();
         error_code ec = new error_code();
-        address add= address.from_string(ip,ec);
-        if (ec.value() > 0)
+        String true_ip=getTrueIP(ip);
+        address add= address.from_string(true_ip,ec);
+        if (ec.value() > 0) {
+            Log.e(TAG, "address.from_string error " + ec.message() +" ip "+ip);
             return;
+        }
         ec.clear();
         filter.add_rule(add,add,ip_filter.access_flags.blocked.swigValue());
         sessionManager.swig().set_ip_filter(filter);
         insertBanQueue(ip);
+    }
+
+    private String getTrueIP(String ip) {
+        char[] chars=ip.toCharArray();
+        int p1_colon=0;
+        int p2_colon=0;
+        for(int i = 0;i<chars.length;i++){
+            if (chars[i]==':') {
+                if(p1_colon==0) p1_colon=i;
+                else p2_colon=i;
+            }
+        }
+        char[] cip= Arrays.copyOfRange(chars,p1_colon+3,p2_colon);
+        if(chars[p1_colon+3]=='[') return String.valueOf(cip,1,cip.length-2);
+        else return String.valueOf(cip);
     }
 
     private void insertBanQueue(String ip) {
