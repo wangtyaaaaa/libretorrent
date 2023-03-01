@@ -330,7 +330,7 @@ class TorrentDownloadImpl implements TorrentDownload
     }
 
     private void autoBanBadClient() {
-        String filter1="-(XL|SD|XF|QD|BN|DL)(\\d+)-";
+        String filter1="[—-](XL|SD|XF|QD|BN|DL)(\\d+)-";
         String filter2="(\\d+.\\d+.\\d+.\\d+|cacao_torrent)";
         for (PeerInfo peerInfo: getPeerInfoList()) {
             if(peerInfo.client.matches(filter1+".*")
