@@ -294,7 +294,7 @@ class TorrentDownloadImpl implements TorrentDownload
                     handleTorrentChecked();
                     break;
                 case PEER_CONNECT:
-                    if(banCheckTime>System.currentTimeMillis()){
+                    if(banCheckTime<System.currentTimeMillis()){
                         checkBanedIPTimeout();
                         autoBanBadClient();
                         banCheckTime=System.currentTimeMillis()+5000;
@@ -330,13 +330,17 @@ class TorrentDownloadImpl implements TorrentDownload
     }
 
     private void autoBanBadClient() {
+        Log.i(TAG,"[BadClient]Checking Bad Client. Client count:" + getPeerInfoList().size());
         String filter1="[—-](XL|SD|XF|QD|BN|DL)(\\d+)-";
-        String filter2="(\\d+.\\d+.\\d+.\\d+|cacao_torrent)";
+        String filter2="((\\d+.\\d+.\\d+.\\d+|cacao_torrent))";
+        String filter3="(((dt|hp|xm)/torrent|Gopeed dev|(Taipei-torrent( dev)?)))";
         for (PeerInfo peerInfo: getPeerInfoList()) {
+           // Log.i(TAG,"[BadClient]Checking Bad Client. Client name:" + peerInfo.client);
             if(peerInfo.client.matches(filter1+".*")
              ||peerInfo.client.matches(filter2+".*")
+             ||peerInfo.client.matches(filter3+".*")
              ||peerInfo.client.startsWith("Xunlei")) {
-                Log.i(TAG,"Auto banning bad peer pid:"+ peerInfo.parcelId + "ip:"+peerInfo.ip+"  client:"+peerInfo.client);
+                Log.i(TAG,"[BadClient]Auto banning bad peer pid:"+ peerInfo.parcelId + "ip:"+peerInfo.ip+"  client:"+peerInfo.client);
                 tempBanIP(peerInfo.ip);
             }
         };
