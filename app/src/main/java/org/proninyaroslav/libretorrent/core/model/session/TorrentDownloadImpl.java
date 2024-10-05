@@ -54,8 +54,11 @@ import org.libtorrent4j.alerts.SaveResumeDataAlert;
 import org.libtorrent4j.alerts.StateChangedAlert;
 import org.libtorrent4j.alerts.TorrentAlert;
 import org.libtorrent4j.alerts.TorrentErrorAlert;
+import org.libtorrent4j.swig.address;
 import org.libtorrent4j.swig.announce_entry;
 import org.libtorrent4j.swig.byte_vector;
+import org.libtorrent4j.swig.error_code;
+import org.libtorrent4j.swig.ip_filter;
 import org.libtorrent4j.swig.libtorrent;
 import org.libtorrent4j.swig.libtorrent_errors;
 import org.libtorrent4j.swig.peer_info_vector;
@@ -77,6 +80,8 @@ import org.proninyaroslav.libretorrent.core.storage.TorrentRepository;
 import org.proninyaroslav.libretorrent.core.system.FileSystemFacade;
 
 import java.io.FileNotFoundException;
+import java.lang.reflect.Array;
+import java.nio.file.LinkOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -84,6 +89,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Queue;
 import java.util.Set;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -124,6 +130,7 @@ class TorrentDownloadImpl implements TorrentDownload
             AlertType.FILE_ERROR.swig(),
             AlertType.FASTRESUME_REJECTED.swig(),
             AlertType.TORRENT_CHECKED.swig(),
+            AlertType.PEER_CONNECT.swig(),
     };
 
     private SessionManager sessionManager;
@@ -144,7 +151,18 @@ class TorrentDownloadImpl implements TorrentDownload
     private boolean resumeDataRejected;
     private boolean hasMissingFiles;
     private boolean hasFirstLastPiecePriority;
+    private Queue<IPTime> banQueue;
+    private long banCheckTime;
 
+    private class IPTime{
+        String ip;
+        long time;
+
+        public IPTime(String ip, long time) {
+            this.ip = ip;
+            this.time = time;
+        }
+    }
     public TorrentDownloadImpl(SessionManager sessionManager,
                                TorrentRepository repo,
                                FileSystemFacade fs,
@@ -164,6 +182,7 @@ class TorrentDownloadImpl implements TorrentDownload
         partsFile = getPartsFile();
         listener = new InnerListener();
         sessionManager.addListener(listener);
+        banQueue= new ConcurrentLinkedQueue<>();
 
         var torrent = repo.getTorrentById(id);
         if (torrent != null) {
@@ -274,11 +293,87 @@ class TorrentDownloadImpl implements TorrentDownload
                 case TORRENT_CHECKED:
                     handleTorrentChecked();
                     break;
+                case PEER_CONNECT:
+                    if(banCheckTime>System.currentTimeMillis()){
+                        checkBanedIPTimeout();
+                        autoBanBadClient();
+                        banCheckTime=System.currentTimeMillis()+5000;
+                    }
                 default:
                     checkError(alert);
                     break;
             }
         }
+    }
+
+    private void checkBanedIPTimeout() {
+
+        IPTime ipTime;
+        while((ipTime=banQueue.peek())!=null){
+            if(System.currentTimeMillis()>ipTime.time){
+                removeBanedIP(ipTime.ip);
+                banQueue.remove();
+            }else return;
+        }
+    }
+
+    private void removeBanedIP(String ip) {
+        ip_filter filter=sessionManager.swig().get_ip_filter();
+        error_code ec = new error_code();
+        String true_ip=getTrueIP(ip);
+        address add= address.from_string(true_ip,ec);
+        if (ec.value() > 0)
+            return;
+        ec.clear();
+        filter.add_rule(add,add,0);
+        sessionManager.swig().set_ip_filter(filter);
+    }
+
+    private void autoBanBadClient() {
+        String filter1="[—-](XL|SD|XF|QD|BN|DL)(\\d+)-";
+        String filter2="(\\d+.\\d+.\\d+.\\d+|cacao_torrent)";
+        for (PeerInfo peerInfo: getPeerInfoList()) {
+            if(peerInfo.client.matches(filter1+".*")
+             ||peerInfo.client.matches(filter2+".*")
+             ||peerInfo.client.startsWith("Xunlei")) {
+                Log.i(TAG,"Auto banning bad peer pid:"+ peerInfo.parcelId + "ip:"+peerInfo.ip+"  client:"+peerInfo.client);
+                tempBanIP(peerInfo.ip);
+            }
+        };
+    }
+
+    private void tempBanIP(String ip) {
+        ip_filter filter = sessionManager.swig().get_ip_filter();
+        error_code ec = new error_code();
+        String true_ip=getTrueIP(ip);
+        address add= address.from_string(true_ip,ec);
+        if (ec.value() > 0) {
+            Log.e(TAG, "address.from_string error " + ec.message() +" ip "+ip);
+            return;
+        }
+        ec.clear();
+        filter.add_rule(add,add,ip_filter.access_flags.blocked.swigValue());
+        sessionManager.swig().set_ip_filter(filter);
+        insertBanQueue(ip);
+    }
+
+    private String getTrueIP(String ip) {
+        char[] chars=ip.toCharArray();
+        int p1_colon=0;
+        int p2_colon=0;
+        for(int i = 0;i<chars.length;i++){
+            if (chars[i]==':') {
+                if(p1_colon==0) p1_colon=i;
+                else p2_colon=i;
+            }
+        }
+        char[] cip= Arrays.copyOfRange(chars,p1_colon+3,p2_colon);
+        if(chars[p1_colon+3]=='[') return String.valueOf(cip,1,cip.length-2);
+        else return String.valueOf(cip);
+    }
+
+    private void insertBanQueue(String ip) {
+        banQueue.add(new IPTime(ip,System.currentTimeMillis()+60*60*1000));
     }
 
     private void onStorageMoved(boolean success)
